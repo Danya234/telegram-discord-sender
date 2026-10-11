@@ -1,32 +1,38 @@
 import os
 import html
 import time
+import smtplib
 import traceback
 import urllib.request
 import urllib.parse
+from email.mime.text import MIMEText
+from email.header import Header
 from threading import Thread
 from flask import Flask
 import discord
 
 # ================= НАСТРОЙКИ =================
+# Telegram
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "ВАШ_ТОКЕН_ТЕЛЕГРАМ")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "ВАШ_CHAT_ID")
+
+# Mail.ru
+MAIL_USER = os.environ.get("MAIL_USER", "vash_box@mail.ru")        # Ваш адрес @mail.ru
+MAIL_PASS = os.environ.get("MAIL_PASS", "пароль_приложения_сюда") # Пароль для внешних приложений
+MAIL_TO = os.environ.get("MAIL_TO", MAIL_USER)                    # Куда слать (обычно тот же ящик)
+
+# Discord
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN", "ВАШ_ТОКЕН_ДИСКОРДА")
-
-# ID вашего целевого сервера (сообщения будут идти ТОЛЬКО с него)
-TARGET_GUILD_ID = 1541087180297076756
-
-# Если нужны только конкретные каналы на этом сервере — укажите их ID: [123, 456].
-# Если оставить пустым [], бот будет присылать сообщения со ВСЕХ каналов этого сервера:
+TARGET_GUILD_ID = 1541087180297076756  # Ваш сервер
 TARGET_CHANNELS = []
 # =============================================
 
-# --- ВЕБ-СЕРВЕР ДЛЯ АНТИ-СНА НА RENDER ---
+# --- ВЕБ-СЕРВЕР АНТИ-СНА НА RENDER ---
 web_app = Flask('')
 
 @web_app.route('/')
 def home():
-    return "✅ Discord-to-Telegram Bot is running 24/7!"
+    return "✅ Discord-to-Telegram & Mail.ru Bot is running 24/7!"
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -37,22 +43,22 @@ def keep_alive():
     server_thread.daemon = True
     server_thread.start()
 
-# --- ЛОГИКА СЛУШАТЕЛЯ DISCORD ---
-class DiscordToTelegram(discord.Client):
+# --- ЛОГИКА ДИСКОРД БОТА ---
+class DiscordNotifier(discord.Client):
     async def on_ready(self):
-        print(f"✅ Успешное подключение к Discord под аккаунтом: {self.user.name}")
-        print(f"🎯 Фильтр включён: отслеживается только сервер с ID {TARGET_GUILD_ID}")
+        print(f"✅ Успешное подключение к Discord: {self.user.name}")
+        print(f"🎯 Отслеживается сервер ID: {TARGET_GUILD_ID}")
 
     async def on_message(self, message):
-        # 1. Игнорируем сообщения от самого себя
+        # 1. Игнорируем свои сообщения
         if message.author == self.user:
             return
 
-        # 2. ФИЛЬТР: игнорируем ЛС и все остальные серверы
+        # 2. Фильтр сервера
         if not message.guild or message.guild.id != TARGET_GUILD_ID:
             return
 
-        # 3. Фильтр каналов внутри сервера (если список не пустой)
+        # 3. Фильтр каналов
         if TARGET_CHANNELS and message.channel.id not in TARGET_CHANNELS:
             return
 
@@ -61,18 +67,25 @@ class DiscordToTelegram(discord.Client):
         author_name = message.author.display_name
         author_tag = message.author.name
 
-        content = html.escape(message.clean_content) if message.clean_content else "<i>[Вложение, стикер или эмбед]</i>"
-        safe_server = html.escape(server_name)
-        safe_channel = html.escape(channel_name)
-        safe_author = html.escape(author_name)
+        raw_content = message.clean_content or "[Вложение, стикер или эмбед]"
+        safe_content = html.escape(raw_content)
 
-        text = (
-            f"🔔 <b>{safe_server}</b> | <code>{safe_channel}</code>\n"
-            f"👤 <b>{safe_author}</b> (@{author_tag}):\n\n"
-            f"{content}"
+        # Текст для Telegram
+        tg_text = (
+            f"🔔 <b>{html.escape(server_name)}</b> | <code>{html.escape(channel_name)}</code>\n"
+            f"👤 <b>{html.escape(author_name)}</b> (@{author_tag}):\n\n"
+            f"{safe_content}"
         )
 
-        self.send_telegram(text)
+        # Тема и текст для Почты
+        email_subject = f"Discord: {author_name} в {channel_name}"
+        email_body = f"Сервер: {server_name}\nКанал: {channel_name}\nАвтор: {author_name} (@{author_tag})\n\n{raw_content}"
+
+        # Отправляем в Telegram
+        self.send_telegram(tg_text)
+
+        # Отправляем на Mail.ru (в отдельном потоке, чтобы не тормозить бот)
+        Thread(target=self.send_mail, args=(email_subject, email_body)).start()
 
     def send_telegram(self, text):
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -88,24 +101,36 @@ class DiscordToTelegram(discord.Client):
         except Exception as e:
             print(f"Ошибка отправки в Telegram: {e}")
 
-# --- ТОЧКА ЗАПУСКА С ПЕРЕХВАТОМ ОШИБОК ---
+    def send_mail(self, subject, body):
+        if not MAIL_USER or not MAIL_PASS:
+            return
+        try:
+            msg = MIMEText(body, 'plain', 'utf-8')
+            msg['Subject'] = Header(subject, 'utf-8')
+            msg['From'] = MAIL_USER
+            msg['To'] = MAIL_TO
+
+            with smtplib.SMTP_SSL('smtp.mail.ru', 465, timeout=10) as server:
+                server.login(MAIL_USER, MAIL_PASS)
+                server.sendmail(MAIL_USER, [MAIL_TO], msg.as_string())
+        except Exception as e:
+            print(f"Ошибка отправки на Mail.ru: {e}")
+
+# --- ЗАПУСК ---
 if __name__ == "__main__":
-    # Запуск веб-сервера анти-сна
     keep_alive()
 
-    # Проверка наличия токена
     if not DISCORD_TOKEN or "ВАШ_ТОКЕН" in DISCORD_TOKEN:
-        print("❌ ОШИБКА: Токен Discord не указан в переменных окружения!")
+        print("❌ ОШИБКА: DISCORD_TOKEN не задан!")
         while True:
             time.sleep(3600)
 
-    client = DiscordToTelegram()
+    client = DiscordNotifier()
     try:
-        print("⏳ Попытка входа в Discord...")
+        print("⏳ Запуск бота...")
         client.run(DISCORD_TOKEN)
     except Exception as e:
         print("❌ ОШИБКА ПРИ ВХОДЕ В DISCORD:")
         print(traceback.format_exc())
-        print("ℹ️ Сервис не выключается, чтобы логи оставались доступны.")
         while True:
             time.sleep(3600)
