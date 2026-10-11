@@ -84,20 +84,24 @@ class DiscordNotifier(discord.Client):
             print(f"Ошибка отправки в Telegram: {e}")
 
     def send_yandex_mail(self, subject, body):
+        print(f"📧 Попытка отправки письма на Яндекс... Пользователь: {YANDEX_USER}", flush=True)
         if not YANDEX_USER or not YANDEX_PASS or "пароль" in YANDEX_PASS:
+            print("❌ ОШИБКА: YANDEX_USER или YANDEX_PASS не настроены в Environment на Render!", flush=True)
             return
+
         try:
             msg = MIMEText(body, 'plain', 'utf-8')
             msg['Subject'] = Header(subject, 'utf-8')
             msg['From'] = YANDEX_USER
             msg['To'] = YANDEX_TO
 
+            print("🔌 Подключение к smtp.yandex.ru:465...", flush=True)
             with smtplib.SMTP_SSL('smtp.yandex.ru', 465, timeout=10) as server:
                 server.login(YANDEX_USER, YANDEX_PASS)
                 server.sendmail(YANDEX_USER, [YANDEX_TO], msg.as_string())
+            print("✅ Письмо успешно отправлено на Яндекс Почту!", flush=True)
         except Exception as e:
-            print(f"Ошибка отправки на Яндекс Почту: {e}")
-
+            print(f"❌ Ошибка отправки на Яндекс Почту: {e}", flush=True)
 # Создаём экземпляр клиента
 client = DiscordNotifier()
 
