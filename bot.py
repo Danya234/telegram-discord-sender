@@ -16,15 +16,15 @@ import discord
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "ВАШ_ТОКЕН_ТЕЛЕГРАМ")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "ВАШ_CHAT_ID")
 
-# Mail.ru
-MAIL_USER = os.environ.get("MAIL_USER", "vash_box@mail.ru")        # Ваш адрес @mail.ru
-MAIL_PASS = os.environ.get("MAIL_PASS", "пароль_приложения_сюда") # Пароль для внешних приложений
-MAIL_TO = os.environ.get("MAIL_TO", MAIL_USER)                    # Куда слать (обычно тот же ящик)
+# Яндекс Почта
+YANDEX_USER = os.environ.get("YANDEX_USER", "vash_login@yandex.ru")  # Ваш адрес @yandex.ru
+YANDEX_PASS = os.environ.get("YANDEX_PASS", "пароль_приложения")     # 16-значный пароль приложения
+YANDEX_TO = os.environ.get("YANDEX_TO", YANDEX_USER)                 # Куда слать (по умолчанию на этот же ящик)
 
 # Discord
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN", "ВАШ_ТОКЕН_ДИСКОРДА")
-TARGET_GUILD_ID = 1541087180297076756  # Ваш сервер
-TARGET_CHANNELS = []
+TARGET_GUILD_ID = 1541087180297076756  # Ваш целевой сервер
+TARGET_CHANNELS = []                    # Пустой список = все каналы сервера
 # =============================================
 
 # --- ВЕБ-СЕРВЕР АНТИ-СНА НА RENDER ---
@@ -32,7 +32,7 @@ web_app = Flask('')
 
 @web_app.route('/')
 def home():
-    return "✅ Discord-to-Telegram & Mail.ru Bot is running 24/7!"
+    return "✅ Discord-to-Telegram & Yandex Bot is running 24/7!"
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -43,14 +43,14 @@ def keep_alive():
     server_thread.daemon = True
     server_thread.start()
 
-# --- ЛОГИКА ДИСКОРД БОТА ---
+# --- ЛОГИКА ДИСКОРД СЛУШАТЕЛЯ ---
 class DiscordNotifier(discord.Client):
     async def on_ready(self):
         print(f"✅ Успешное подключение к Discord: {self.user.name}")
         print(f"🎯 Отслеживается сервер ID: {TARGET_GUILD_ID}")
 
     async def on_message(self, message):
-        # 1. Игнорируем свои сообщения
+        # 1. Игнорируем собственные сообщения
         if message.author == self.user:
             return
 
@@ -70,22 +70,22 @@ class DiscordNotifier(discord.Client):
         raw_content = message.clean_content or "[Вложение, стикер или эмбед]"
         safe_content = html.escape(raw_content)
 
-        # Текст для Telegram
+        # 1. Форматирование для Telegram
         tg_text = (
             f"🔔 <b>{html.escape(server_name)}</b> | <code>{html.escape(channel_name)}</code>\n"
             f"👤 <b>{html.escape(author_name)}</b> (@{author_tag}):\n\n"
             f"{safe_content}"
         )
 
-        # Тема и текст для Почты
+        # 2. Форматирование для Яндекс Почты
         email_subject = f"Discord: {author_name} в {channel_name}"
         email_body = f"Сервер: {server_name}\nКанал: {channel_name}\nАвтор: {author_name} (@{author_tag})\n\n{raw_content}"
 
-        # Отправляем в Telegram
+        # Отправка в Telegram
         self.send_telegram(tg_text)
 
-        # Отправляем на Mail.ru (в отдельном потоке, чтобы не тормозить бот)
-        Thread(target=self.send_mail, args=(email_subject, email_body)).start()
+        # Отправка на Яндекс Почту (в фоновом потоке, чтобы бот не зависал)
+        Thread(target=self.send_yandex_mail, args=(email_subject, email_body)).start()
 
     def send_telegram(self, text):
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -101,22 +101,23 @@ class DiscordNotifier(discord.Client):
         except Exception as e:
             print(f"Ошибка отправки в Telegram: {e}")
 
-    def send_mail(self, subject, body):
-        if not MAIL_USER or not MAIL_PASS:
+    def send_yandex_mail(self, subject, body):
+        if not YANDEX_USER or not YANDEX_PASS or "пароль" in YANDEX_PASS:
             return
         try:
             msg = MIMEText(body, 'plain', 'utf-8')
             msg['Subject'] = Header(subject, 'utf-8')
-            msg['From'] = MAIL_USER
-            msg['To'] = MAIL_TO
+            msg['From'] = YANDEX_USER
+            msg['To'] = YANDEX_TO
 
-            with smtplib.SMTP_SSL('smtp.mail.ru', 465, timeout=10) as server:
-                server.login(MAIL_USER, MAIL_PASS)
-                server.sendmail(MAIL_USER, [MAIL_TO], msg.as_string())
+            # Подключение к SMTP серверу Яндекса
+            with smtplib.SMTP_SSL('smtp.yandex.ru', 465, timeout=10) as server:
+                server.login(YANDEX_USER, YANDEX_PASS)
+                server.sendmail(YANDEX_USER, [YANDEX_TO], msg.as_string())
         except Exception as e:
-            print(f"Ошибка отправки на Mail.ru: {e}")
+            print(f"Ошибка отправки на Яндекс Почту: {e}")
 
-# --- ЗАПУСК ---
+# --- ТОЧКА ЗАПУСКА ---
 if __name__ == "__main__":
     keep_alive()
 
