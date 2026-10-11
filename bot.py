@@ -1,5 +1,7 @@
 import os
 import html
+import time
+import traceback
 import urllib.request
 import urllib.parse
 from threading import Thread
@@ -7,17 +9,15 @@ from flask import Flask
 import discord
 
 # ================= НАСТРОЙКИ =================
-# Токены берутся из переменных Render (или впишите вручную в кавычки)
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "ВАШ_ТОКЕН_ТЕЛЕГРАМ")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "ВАШ_CHAT_ID")
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN", "ВАШ_ТОКЕН_ДИСКОРДА")
 
-# Если список пустой [], бот слушает ВСЕ каналы и серверы.
-# Если нужны конкретные каналы — укажите их ID числами: [123456789, 987654321]
+# Список ID конкретных каналов (если пустой [], слушаются абсолютно ВСЕ чаты)
 TARGET_CHANNELS = []
 # =============================================
 
-# --- ВЕБ-СЕРВЕР ДЛЯ RENDER (ЧТОБЫ НЕ ЗАСЫПАЛ) ---
+# --- ВЕБ-СЕРВЕР ДЛЯ АНТИ-СНА НА RENDER ---
 web_app = Flask('')
 
 @web_app.route('/')
@@ -25,7 +25,6 @@ def home():
     return "✅ Discord-to-Telegram Bot is running 24/7!"
 
 def run_web_server():
-    # Render передает свой порт через переменную окружения PORT
     port = int(os.environ.get("PORT", 8080))
     web_app.run(host='0.0.0.0', port=port)
 
@@ -34,27 +33,23 @@ def keep_alive():
     server_thread.daemon = True
     server_thread.start()
 
-# --- ЛОГИКА ДИСКОРД БОТА ---
+# --- ЛОГИКА СЛУШАТЕЛЯ DISCORD ---
 class DiscordToTelegram(discord.Client):
     async def on_ready(self):
         print(f"✅ Успешное подключение к Discord под аккаунтом: {self.user.name}")
 
     async def on_message(self, message):
-        # Игнорируем собственные сообщения
         if message.author == self.user:
             return
 
-        # Фильтр каналов (если задан)
         if TARGET_CHANNELS and message.channel.id not in TARGET_CHANNELS:
             return
 
-        # Получаем данные сообщения
         server_name = message.guild.name if message.guild else "Личные сообщения"
         channel_name = f"#{message.channel.name}" if hasattr(message.channel, 'name') else "ЛС"
         author_name = message.author.display_name
         author_tag = message.author.name
 
-        # Экранируем спецсимволы для безопасного HTML в Telegram
         content = html.escape(message.clean_content) if message.clean_content else "<i>[Вложение, стикер или эмбед]</i>"
         safe_server = html.escape(server_name)
         safe_channel = html.escape(channel_name)
@@ -70,4 +65,37 @@ class DiscordToTelegram(discord.Client):
 
     def send_telegram(self, text):
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        d
+        data = urllib.parse.urlencode({
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": "true"
+        }).encode("utf-8")
+        try:
+            req = urllib.request.Request(url, data=data)
+            urllib.request.urlopen(req, timeout=5)
+        except Exception as e:
+            print(f"Ошибка отправки в Telegram: {e}")
+
+# --- ТОЧКА ЗАПУСКА С ПЕРЕХВАТОМ ОШИБОК ---
+if __name__ == "__main__":
+    # 1. Запускаем веб-сервер
+    keep_alive()
+
+    # 2. Проверяем, введён ли токен
+    if not DISCORD_TOKEN or "ВАШ_ТОКЕН" in DISCORD_TOKEN:
+        print("❌ ОШИБКА: Токен Discord не указан! Задайте DISCORD_TOKEN в настройках Environment на Render.")
+        while True:
+            time.sleep(3600)
+
+    # 3. Запускаем Discord
+    client = DiscordToTelegram()
+    try:
+        print("⏳ Попытка входа в Discord...")
+        client.run(DISCORD_TOKEN)
+    except Exception as e:
+        print("❌ ОШИБКА ПРИ ВХОДЕ В DISCORD:")
+        print(traceback.format_exc())
+        print("ℹ️ Сервис не выключается, чтобы логи оставались доступны.")
+        while True:
+            time.sleep(3600)
