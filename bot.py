@@ -27,64 +27,16 @@ TARGET_GUILD_ID = 1541087180297076756  # Ваш целевой сервер
 TARGET_CHANNELS = []                    # Пустой список = все каналы сервера
 # =============================================
 
-# --- ВЕБ-СЕРВЕР АНТИ-СНА НА FLASK ---
-web_app = Flask('')
-
-@web_app.route('/')
-def home():
-    return "✅ Discord-to-Telegram & Yandex Bot is running 24/7!"
-
-def run_web_server():
-    port = int(os.environ.get("PORT", 8080))
-    web_app.run(host='0.0.0.0', port=port)
-
-# --- АВТОМАТИЧЕСКИЙ САМО-ПИНГ (НЕ ДАЁТ RENDER ЗАСНУТЬ) ---
-def self_ping_loop():
-    # Ждём 40 секунд при старте, чтобы веб-сервер успел запуститься
-    time.sleep(40)
-    
-    # Render автоматически передаёт свой адрес в RENDER_EXTERNAL_URL
-    app_url = os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("SELF_PING_URL")
-    
-    if not app_url:
-        print("⚠️ Переменная RENDER_EXTERNAL_URL не найдена. Если авто-пинг не идёт, добавьте SELF_PING_URL со ссылкой на ваш сервис.")
-        return
-
-    print(f"🔄 Система защиты от сна включена! Авто-пинг каждые 8 минут для: {app_url}")
-
-    while True:
-        try:
-            req = urllib.request.Request(app_url, headers={'User-Agent': 'KeepAliveBot/1.0'})
-            with urllib.request.urlopen(req, timeout=15) as response:
-                pass  # Запрос успешно прошёл, Render сбросил таймер сна
-        except Exception as e:
-            print(f"⚠️ Ошибка авто-пинга (обычно не критично): {e}")
-
-        # Спим 8 минут (480 сек) — таймер сна Render составляет 15 минут
-        time.sleep(480)
-
-def keep_alive():
-    # Поток 1: Веб-сервер
-    server_thread = Thread(target=run_web_server)
-    server_thread.daemon = True
-    server_thread.start()
-
-    # Поток 2: Авто-пингер
-    ping_thread = Thread(target=self_ping_loop)
-    ping_thread.daemon = True
-    ping_thread.start()
-
-# --- ЛОГИКА СЛУШАТЕЛЯ DISCORD ---
+# --- КЛИЕНТ DISCORD ---
 class DiscordNotifier(discord.Client):
     async def on_ready(self):
         print(f"✅ Успешное подключение к Discord: {self.user.name}")
         print(f"🎯 Отслеживается сервер ID: {TARGET_GUILD_ID}")
 
     async def on_message(self, message):
-        # 1. Проверяем сообщения от самого себя: игнорируем всё, КРОМЕ команды !тест
+        # 1. Полностью игнорируем свои сообщения (максимальная безопасность)
         if message.author == self.user:
-            if not message.content.startswith("!тест"):
-                return
+            return
 
         # 2. Фильтр сервера
         if not message.guild or message.guild.id != TARGET_GUILD_ID:
@@ -113,10 +65,8 @@ class DiscordNotifier(discord.Client):
         email_subject = f"Discord: {author_name} в {channel_name}"
         email_body = f"Сервер: {server_name}\nКанал: {channel_name}\nАвтор: {author_name} (@{author_tag})\n\n{raw_content}"
 
-        # Отправка в Telegram
+        # Отправка
         self.send_telegram(tg_text)
-
-        # Отправка на Яндекс Почту (в отдельном потоке)
         Thread(target=self.send_yandex_mail, args=(email_subject, email_body)).start()
 
     def send_telegram(self, text):
@@ -148,9 +98,57 @@ class DiscordNotifier(discord.Client):
         except Exception as e:
             print(f"Ошибка отправки на Яндекс Почту: {e}")
 
-# --- ТОЧКА ЗАПУСКА С ЗАЩИТОЙ ---
+# Создаём экземпляр клиента
+client = DiscordNotifier()
+
+# --- ВЕБ-СЕРВЕР АНТИ-СНА НА FLASK ---
+web_app = Flask('')
+
+@web_app.route('/')
+def home():
+    return "✅ Discord-to-Telegram & Yandex Bot is running 24/7!"
+
+# 🧪 СЕКРЕТНАЯ ССЫЛКА ДЛЯ БЕЗОПАСНОГО ТЕСТА
+@web_app.route('/test')
+def trigger_test():
+    title = "Тестовое уведомление"
+    text = "Проверка связи: сервер на Render активен, бот работает, пуши в Telegram и Яндекс Почту доходят моментально!"
+    
+    client.send_telegram(f"🧪 <b>{title}</b>\n\n{text}")
+    Thread(target=client.send_yandex_mail, args=(title, text)).start()
+    
+    return "🚀 Успешно! Тестовые уведомления отправлены вам в Telegram и на Почту."
+
+# --- АВТОМАТИЧЕСКИЙ САМО-ПИНГ ---
+def self_ping_loop():
+    time.sleep(40)
+    app_url = os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("SELF_PING_URL")
+    
+    if not app_url:
+        print("⚠️ RENDER_EXTERNAL_URL не найден.")
+        return
+
+    print(f"🔄 Защита от сна активна для: {app_url}")
+    while True:
+        try:
+            req = urllib.request.Request(app_url, headers={'User-Agent': 'KeepAliveBot/1.0'})
+            with urllib.request.urlopen(req, timeout=15):
+                pass
+        except Exception:
+            pass
+        time.sleep(480)  # Пинг каждые 8 минут
+
+def keep_alive():
+    t1 = Thread(target=lambda: web_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080))))
+    t1.daemon = True
+    t1.start()
+
+    t2 = Thread(target=self_ping_loop)
+    t2.daemon = True
+    t2.start()
+
+# --- ЗАПУСК ---
 if __name__ == "__main__":
-    # Запускаем веб-сервер и авто-пинг против сна
     keep_alive()
 
     if not DISCORD_TOKEN or "ВАШ_ТОКЕН" in DISCORD_TOKEN:
@@ -158,9 +156,8 @@ if __name__ == "__main__":
         while True:
             time.sleep(3600)
 
-    client = DiscordNotifier()
     try:
-        print("⏳ Запуск бота...")
+        print("⏳ Запуск Discord слушателя...")
         client.run(DISCORD_TOKEN)
     except Exception as e:
         print("❌ ОШИБКА ПРИ ВХОДЕ В DISCORD:")
