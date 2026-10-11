@@ -13,7 +13,11 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "ВАШ_ТОКЕН_Т�
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "ВАШ_CHAT_ID")
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN", "ВАШ_ТОКЕН_ДИСКОРДА")
 
-# Список ID конкретных каналов (если пустой [], слушаются абсолютно ВСЕ чаты)
+# ID вашего целевого сервера (сообщения будут идти ТОЛЬКО с него)
+TARGET_GUILD_ID = 1541087180297076756
+
+# Если нужны только конкретные каналы на этом сервере — укажите их ID: [123, 456].
+# Если оставить пустым [], бот будет присылать сообщения со ВСЕХ каналов этого сервера:
 TARGET_CHANNELS = []
 # =============================================
 
@@ -37,16 +41,23 @@ def keep_alive():
 class DiscordToTelegram(discord.Client):
     async def on_ready(self):
         print(f"✅ Успешное подключение к Discord под аккаунтом: {self.user.name}")
+        print(f"🎯 Фильтр включён: отслеживается только сервер с ID {TARGET_GUILD_ID}")
 
     async def on_message(self, message):
+        # 1. Игнорируем сообщения от самого себя
         if message.author == self.user:
             return
 
+        # 2. ФИЛЬТР: игнорируем ЛС и все остальные серверы
+        if not message.guild or message.guild.id != TARGET_GUILD_ID:
+            return
+
+        # 3. Фильтр каналов внутри сервера (если список не пустой)
         if TARGET_CHANNELS and message.channel.id not in TARGET_CHANNELS:
             return
 
-        server_name = message.guild.name if message.guild else "Личные сообщения"
-        channel_name = f"#{message.channel.name}" if hasattr(message.channel, 'name') else "ЛС"
+        server_name = message.guild.name
+        channel_name = f"#{message.channel.name}" if hasattr(message.channel, 'name') else "Канал"
         author_name = message.author.display_name
         author_tag = message.author.name
 
@@ -79,16 +90,15 @@ class DiscordToTelegram(discord.Client):
 
 # --- ТОЧКА ЗАПУСКА С ПЕРЕХВАТОМ ОШИБОК ---
 if __name__ == "__main__":
-    # 1. Запускаем веб-сервер
+    # Запуск веб-сервера анти-сна
     keep_alive()
 
-    # 2. Проверяем, введён ли токен
+    # Проверка наличия токена
     if not DISCORD_TOKEN or "ВАШ_ТОКЕН" in DISCORD_TOKEN:
-        print("❌ ОШИБКА: Токен Discord не указан! Задайте DISCORD_TOKEN в настройках Environment на Render.")
+        print("❌ ОШИБКА: Токен Discord не указан в переменных окружения!")
         while True:
             time.sleep(3600)
 
-    # 3. Запускаем Discord
     client = DiscordToTelegram()
     try:
         print("⏳ Попытка входа в Discord...")
