@@ -1,18 +1,28 @@
 import os
 import html
 import time
+import smtplib
 import traceback
 import urllib.request
 import urllib.parse
+from email.mime.text import MIMEText
+from email.header import Header
 from threading import Thread
 from flask import Flask
 import discord
 
 # ================= НАСТРОЙКИ =================
+# Telegram
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "ВАШ_ТОКЕН_ТЕЛЕГРАМ")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "ВАШ_CHAT_ID")
-DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN", "ВАШ_ТОКЕН_ДИСКОРДА")
 
+# Яндекс Почта
+YANDEX_USER = os.environ.get("YANDEX_USER", "vash_login@yandex.ru")
+YANDEX_PASS = os.environ.get("YANDEX_PASS", "пароль_приложения")
+YANDEX_TO = os.environ.get("YANDEX_TO", YANDEX_USER)
+
+# Discord
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN", "ВАШ_ТОКЕН_ДИСКОРДА")
 TARGET_GUILD_ID = 1541087180297076756  # Ваш целевой сервер
 TARGET_CHANNELS = []                    # Пустой список = все каналы сервера
 # =============================================
@@ -20,14 +30,11 @@ TARGET_CHANNELS = []                    # Пустой список = все к�
 # --- КЛИЕНТ DISCORD ---
 class DiscordNotifier(discord.Client):
     async def on_ready(self):
-        # Принудительно ставим статус «Невидимка» (оффлайн)
-        await self.change_presence(status=discord.Status.invisible)
-        print(f"✅ Успешное подключение к Discord: {self.user.name}", flush=True)
-        print(f"🎯 Отслеживается сервер ID: {TARGET_GUILD_ID}", flush=True)
-        print("👻 Режим скрытности активен: для всех вы ОФФЛАЙН!", flush=True)
+        print(f"✅ Успешное подключение к Discord: {self.user.name}")
+        print(f"🎯 Отслеживается сервер ID: {TARGET_GUILD_ID}")
 
     async def on_message(self, message):
-        # 1. Игнорируем свои сообщения
+        # 1. Полностью игнорируем свои сообщения (максимальная безопасность)
         if message.author == self.user:
             return
 
@@ -47,13 +54,20 @@ class DiscordNotifier(discord.Client):
         raw_content = message.clean_content or "[Вложение, стикер или эмбед]"
         safe_content = html.escape(raw_content)
 
+        # Текст для Telegram
         tg_text = (
             f"🔔 <b>{html.escape(server_name)}</b> | <code>{html.escape(channel_name)}</code>\n"
             f"👤 <b>{html.escape(author_name)}</b> (@{author_tag}):\n\n"
             f"{safe_content}"
         )
 
+        # Текст для Почты
+        email_subject = f"Discord: {author_name} в {channel_name}"
+        email_body = f"Сервер: {server_name}\nКанал: {channel_name}\nАвтор: {author_name} (@{author_tag})\n\n{raw_content}"
+
+        # Отправка
         self.send_telegram(tg_text)
+        Thread(target=self.send_yandex_mail, args=(email_subject, email_body)).start()
 
     def send_telegram(self, text):
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -67,25 +81,43 @@ class DiscordNotifier(discord.Client):
             req = urllib.request.Request(url, data=data)
             urllib.request.urlopen(req, timeout=5)
         except Exception as e:
-            print(f"Ошибка отправки в Telegram: {e}", flush=True)
+            print(f"Ошибка отправки в Telegram: {e}")
 
-# Инициализируем клиент со статусом invisible с первой же секунды
-client = DiscordNotifier(status=discord.Status.invisible)
+    def send_yandex_mail(self, subject, body):
+        if not YANDEX_USER or not YANDEX_PASS or "пароль" in YANDEX_PASS:
+            return
+        try:
+            msg = MIMEText(body, 'plain', 'utf-8')
+            msg['Subject'] = Header(subject, 'utf-8')
+            msg['From'] = YANDEX_USER
+            msg['To'] = YANDEX_TO
+
+            with smtplib.SMTP_SSL('smtp.yandex.ru', 465, timeout=10) as server:
+                server.login(YANDEX_USER, YANDEX_PASS)
+                server.sendmail(YANDEX_USER, [YANDEX_TO], msg.as_string())
+        except Exception as e:
+            print(f"Ошибка отправки на Яндекс Почту: {e}")
+
+# Создаём экземпляр клиента
+client = DiscordNotifier()
 
 # --- ВЕБ-СЕРВЕР АНТИ-СНА НА FLASK ---
 web_app = Flask('')
 
 @web_app.route('/')
 def home():
-    return "✅ Discord-to-Telegram Bot is running 24/7!"
+    return "✅ Discord-to-Telegram & Yandex Bot is running 24/7!"
 
-# Скрытая проверка через браузер
+# 🧪 СЕКРЕТНАЯ ССЫЛКА ДЛЯ БЕЗОПАСНОГО ТЕСТА
 @web_app.route('/test')
 def trigger_test():
     title = "Тестовое уведомление"
-    text = "Проверка связи: бот на Render активен, режим оффлайна работает, пуши в Telegram приходят моментально!"
+    text = "Проверка связи: сервер на Render активен, бот работает, пуши в Telegram и Яндекс Почту доходят моментально!"
+    
     client.send_telegram(f"🧪 <b>{title}</b>\n\n{text}")
-    return "🚀 Успешно! Тестовое уведомление отправлено в Telegram."
+    Thread(target=client.send_yandex_mail, args=(title, text)).start()
+    
+    return "🚀 Успешно! Тестовые уведомления отправлены вам в Telegram и на Почту."
 
 # --- АВТОМАТИЧЕСКИЙ САМО-ПИНГ ---
 def self_ping_loop():
@@ -93,10 +125,10 @@ def self_ping_loop():
     app_url = os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("SELF_PING_URL")
     
     if not app_url:
-        print("⚠️ RENDER_EXTERNAL_URL не найден.", flush=True)
+        print("⚠️ RENDER_EXTERNAL_URL не найден.")
         return
 
-    print(f"🔄 Защита от сна активна для: {app_url}", flush=True)
+    print(f"🔄 Защита от сна активна для: {app_url}")
     while True:
         try:
             req = urllib.request.Request(app_url, headers={'User-Agent': 'KeepAliveBot/1.0'})
@@ -115,20 +147,20 @@ def keep_alive():
     t2.daemon = True
     t2.start()
 
-# --- ТОЧКА ЗАПУСКА С ЗАЩИТОЙ ---
+# --- ЗАПУСК ---
 if __name__ == "__main__":
     keep_alive()
 
     if not DISCORD_TOKEN or "ВАШ_ТОКЕН" in DISCORD_TOKEN:
-        print("❌ ОШИБКА: DISCORD_TOKEN не задан!", flush=True)
+        print("❌ ОШИБКА: DISCORD_TOKEN не задан!")
         while True:
             time.sleep(3600)
 
     try:
-        print("⏳ Запуск Discord слушателя...", flush=True)
+        print("⏳ Запуск Discord слушателя...")
         client.run(DISCORD_TOKEN)
     except Exception as e:
-        print("❌ ОШИБКА ПРИ ВХОДЕ В DISCORD:", flush=True)
-        print(traceback.format_exc(), flush=True)
+        print("❌ ОШИБКА ПРИ ВХОДЕ В DISCORD:")
+        print(traceback.format_exc())
         while True:
             time.sleep(3600)
